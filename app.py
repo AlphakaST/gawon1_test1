@@ -230,7 +230,7 @@ def main():
     with col_img:
         img_path = os.path.join("image", IMAGE_FILENAME)
         if os.path.exists(img_path):
-            st.image(img_path, caption="문항 참고 이미지", use_container_width=True)
+            st.image(img_path, caption="문항 참고 이미지") # 원본 크기 유지
         else:
             st.info(f"이미지 파일을 찾을 수 없습니다: {img_path}")
 
@@ -306,5 +306,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
