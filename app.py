@@ -1,4 +1,4 @@
-# app.py — 아랍 물통 문제 (최종·DAT1·pr 스키마)
+# app.py — 아랍 물통 문제 (최종·DAT1·pr 스키마 / 풀링 안정화 버전)
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, json
@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 import streamlit as st
 import mysql.connector
 from mysql.connector import Error as MySQLError
+from mysql.connector import pooling
 from openai import OpenAI
 
 # ─────────────────────────────────────────────────────
@@ -53,12 +54,15 @@ def get_model_name() -> str:
     return st.secrets.get("OPENAI_MODEL", "gpt-5")
 
 # ─────────────────────────────────────────────────────
-# DB (mysql-connector) — 캐시된 연결은 닫지 않음
+# DB (mysql-connector) — 커넥션 풀 사용
 # ─────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
-def get_mysql_conn():
+def get_mysql_pool():
     cfg = st.secrets.get("connections", {}).get("mysql", {})
-    conn = mysql.connector.connect(
+    # 배포 환경 안정화를 위해 풀링 사용
+    return pooling.MySQLConnectionPool(
+        pool_name="app_pool",
+        pool_size=5,
         host=cfg.get("host"),
         port=cfg.get("port", 3306),
         database=cfg.get("database"),
@@ -66,23 +70,15 @@ def get_mysql_conn():
         password=cfg.get("password"),
         autocommit=True,
     )
-    return conn
 
+def get_conn():
+    # 매 요청마다 풀에서 연결을 '빌려오고' 작업 후 닫아서 반납
+    return get_mysql_pool().get_connection()
 
-def get_live_conn():
-    """캐시 커넥션 유효성 점검 후 필요 시 재연결."""
-    conn = get_mysql_conn()
-    try:
-        # 연결 확인 및 자동 재연결 시도
-        conn.ping(reconnect=True, attempts=3, delay=1)
-    except MySQLError:
-        conn.reconnect(attempts=3, delay=1)
-    return conn
-    
 def init_tables() -> None:
     """DAT1 테이블 보장 (pr 스키마). time=TIMESTAMP 자동기록."""
     try:
-        conn = get_live_conn()
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -96,14 +92,15 @@ def init_tables() -> None:
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """
         )
-        cur.close()  # 커서는 닫아도 됨 (연결은 유지)
+        cur.close()
+        conn.close()  # 풀 반납
     except MySQLError as e:
         st.error(f"[DB] 테이블 초기화 실패: {e}")
 
 def upsert_dat1(student_id: str, answer1: str, feedback1: str, opinion1: str | None) -> None:
     """동일 학번 UPSERT. opinion1=None이면 기존 의견을 보존합니다."""
     try:
-        conn = get_live_conn()
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute(
             """
@@ -117,16 +114,18 @@ def upsert_dat1(student_id: str, answer1: str, feedback1: str, opinion1: str | N
             (student_id, answer1, feedback1, opinion1),
         )
         cur.close()
+        conn.close()  # 풀 반납
     except MySQLError as e:
         st.error(f"[DB] 저장 실패: {e}")
         raise
 
 def update_opinion_only(student_id: str, opinion1: str) -> None:
     try:
-        conn = get_live_conn()
+        conn = get_conn()
         cur = conn.cursor()
         cur.execute("UPDATE DAT1 SET opinion1=%s WHERE id=%s", (opinion1, student_id))
         cur.close()
+        conn.close()  # 풀 반납
     except MySQLError as e:
         st.error(f"[DB] 의견 저장 실패: {e}")
         raise
@@ -187,11 +186,9 @@ def grade_with_openai(student_answer: str) -> Dict[str, Any]:
     except Exception as e:
         msg = str(e).lower()
         if "max_tokens" in msg or "unsupported" in msg:
-            # max_tokens 미지원 → 제거 후 재시도
             kwargs = dict(base_kwargs)
             resp = client.chat.completions.create(**kwargs)
         elif "temperature" in msg:
-            # 안전망: 혹시 기본 템퍼러처도 거부 시
             kwargs = dict(base_kwargs)
             resp = client.chat.completions.create(**kwargs)
         else:
@@ -234,6 +231,7 @@ def main():
     with col_img:
         img_path = os.path.join("image", IMAGE_FILENAME)
         if os.path.exists(img_path):
+            # use_container_width 폐기 예정 → width 파라미터로 교체
             st.image(img_path, caption="문항 참고 이미지", use_container_width=True)
         else:
             st.info(f"이미지 파일을 찾을 수 없습니다: {img_path}")
@@ -283,7 +281,7 @@ def main():
                 student_id=sid.strip(),
                 answer1=answer.strip(),
                 feedback1=json.dumps(payload, ensure_ascii=False),
-                opinion1=None,  # 초기 제출 시 의견 없음
+                opinion1=None,  # 초기 제출 시 의견 없음(보존 로직 적용)
             )
             st.success("채점/피드백이 저장되었습니다. 아래에 ‘한 가지 의견’을 작성해 주세요.")
             st.session_state["last_id"] = sid.strip()
@@ -321,5 +319,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
