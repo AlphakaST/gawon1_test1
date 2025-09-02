@@ -1,3 +1,4 @@
-streamlit>=1.33
+streamlit>=1.32
 openai>=1.30
 mysql-connector-python>=9.0
+pandas>=2.2
