@@ -18,11 +18,11 @@ IMAGE_FILENAME = "image1.png"
 
 QUESTION_TEXT = (
     "다음은 물의 특성을 이용한 아랍인들의 생활 속 지혜와 관련된 사례를 나타낸 것이다.\n\n"
-    "아랍인들은 양가죽으로 만든 물통을 가지고 다녔는데 이 물통은 양가죽을 통해 물이 조금씩 새어 나와 항상 젖어 있었다.\n\n"
+    "아랍인들은 양가죽으로 만든 물통을 가지고 다녔는데 이 물통은 양가죽을 통해 물이 조금씩 새어 나와 항상 젖어 있었다."
     " 하지만 양가죽 물통 속의 물은 의외로 시원하여 무더운 사막에서도 시원한 물을 마실 수 있었다.\n\n"
     "무더운 사막에서도 아랍인들이 시원한 물을 마실 수 있었던 이유를 <조건>에 맞게 서술하시오.[7점]\n\n"
-    "<조건>\n\n"
-    "◦ 새어 나온 물의 상태 변화를 포함하여 서술해야 함.\n\n"
+    "<조건>\n"
+    "◦ 새어 나온 물의 상태 변화를 포함하여 서술해야 함.\n"
     "◦ 에너지 출입을 포함하여 서술해야 함.\n"
 )
 
@@ -58,23 +58,27 @@ def get_model_name() -> str:
 @st.cache_resource(show_spinner=False)
 def get_mysql_conn():
     cfg = st.secrets.get("connections", {}).get("mysql", {})
-    # secrets.toml 예시: database="pr"
-    return mysql.connector.connect(
+    conn = mysql.connector.connect(
         host=cfg.get("host"),
         port=cfg.get("port", 3306),
         database=cfg.get("database"),
-        user=cfg.get("user"),           # ← username 아님
+        user=cfg.get("user"),
         password=cfg.get("password"),
         autocommit=True,
     )
-
-def get_live_conn():
-    """캐시된 커넥션이 끊겨 있으면 재연결."""
-    conn = get_mysql_conn()
-    if not conn.is_connected():
-        conn.reconnect(attempts=3, delay=1)
     return conn
 
+
+def get_live_conn():
+    """캐시 커넥션 유효성 점검 후 필요 시 재연결."""
+    conn = get_mysql_conn()
+    try:
+        # 연결 확인 및 자동 재연결 시도
+        conn.ping(reconnect=True, attempts=3, delay=1)
+    except MySQLError:
+        conn.reconnect(attempts=3, delay=1)
+    return conn
+    
 def init_tables() -> None:
     """DAT1 테이블 보장 (pr 스키마). time=TIMESTAMP 자동기록."""
     try:
@@ -97,18 +101,18 @@ def init_tables() -> None:
         st.error(f"[DB] 테이블 초기화 실패: {e}")
 
 def upsert_dat1(student_id: str, answer1: str, feedback1: str, opinion1: str | None) -> None:
-    """동일 학번 UPSERT. time은 DB가 자동 기록."""
+    """동일 학번 UPSERT. opinion1=None이면 기존 의견을 보존합니다."""
     try:
         conn = get_live_conn()
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO DAT1 (id, answer1, feedback1, opinion1)
-            VALUES (%s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s) AS new
             ON DUPLICATE KEY UPDATE
-              answer1 = VALUES(answer1),
-              feedback1 = VALUES(feedback1),
-              opinion1 = VALUES(opinion1)
+              answer1 = new.answer1,
+              feedback1 = new.feedback1,
+              opinion1 = COALESCE(new.opinion1, DAT1.opinion1)
             """,
             (student_id, answer1, feedback1, opinion1),
         )
@@ -230,14 +234,14 @@ def main():
     with col_img:
         img_path = os.path.join("image", IMAGE_FILENAME)
         if os.path.exists(img_path):
-            st.image(img_path, caption="문항 참고 이미지") # 원본 크기 유지
+            st.image(img_path, caption="문항 참고 이미지", use_container_width=True)
         else:
             st.info(f"이미지 파일을 찾을 수 없습니다: {img_path}")
 
     # 학생 입력 폼
     with st.form("student_form", clear_on_submit=False):
-        sid = st.text_input("학번(5자리, 예: 10130)", placeholder="학번을 입력하세요.")
-        answer = st.text_area("나의 답안", height=180, placeholder="답안을 입력하세요.")
+        sid = st.text_input("학번(5자리, 예: 10130)", placeholder="10130")
+        answer = st.text_area("나의 답안", height=180, placeholder="예) 답안을 입력하세요")
         submitted = st.form_submit_button("채점 받기", type="primary")
 
     if submitted:
@@ -288,25 +292,34 @@ def main():
 
     # 의견 제출
     last_id = st.session_state.get("last_id")
-    if last_id:
-        st.divider()
-        st.subheader("🗣️ 한 가지 의견 제출")
-        st.caption("피드백을 읽고, 무엇을 알게 되었는지/여전히 어려운 점은 무엇인지 3~5문장으로 작성하세요.")
-        op = st.text_area("나의 의견", key="opinion_text", height=120)
-        if st.button("의견 제출"):
-            if not op.strip():
-                st.warning("의견을 입력해 주세요.")
-            else:
-                try:
-                    update_opinion_only(last_id, op.strip())
-                    st.success("의견이 저장되었습니다. 수고했어요! ✨")
-                    st.session_state.pop("last_id", None)
-                except MySQLError:
-                    pass
+
+    st.divider()
+    st.subheader("🗣️ 한 가지 의견 제출")
+    st.caption("피드백을 읽고, 무엇을 알게 되었는지/여전히 어려운 점은 무엇인지 3~5문장으로 작성하세요.")
+
+    op = st.text_area("나의 의견", key="opinion_text", height=120)
+
+    # 세션이 초기화되었을 때 대비: 학번 재확인 입력
+    if not last_id:
+        sid_fallback = st.text_input("학번(세션이 초기화된 경우 다시 입력)", key="sid_fallback", placeholder="10130")
+    else:
+        sid_fallback = last_id
+
+    if st.button("의견 제출"):
+        if not op.strip():
+            st.warning("의견을 입력해 주세요.")
+        elif not validate_student_id(sid_fallback):
+            st.error("학번 형식이 올바르지 않습니다. (예: 10130)")
+        else:
+            try:
+                update_opinion_only(sid_fallback.strip(), op.strip())
+                st.success("의견이 저장되었습니다. 수고했어요! ✨")
+                st.session_state.pop("last_id", None)
+                st.session_state.pop("opinion_text", None)
+            except MySQLError:
+                pass
 
 if __name__ == "__main__":
     main()
-
-
 
 
