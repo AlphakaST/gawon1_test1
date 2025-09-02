@@ -232,7 +232,7 @@ def main():
         img_path = os.path.join("image", IMAGE_FILENAME)
         if os.path.exists(img_path):
             # use_container_width 폐기 예정 → width 파라미터로 교체
-            st.image(img_path, caption="문항 참고 이미지", width='stretch)
+            st.image(img_path, caption="문항 참고 이미지", width='stretch')
         else:
             st.info(f"이미지 파일을 찾을 수 없습니다: {img_path}")
 
@@ -319,4 +319,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
