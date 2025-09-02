@@ -236,8 +236,8 @@ def main():
 
     # 학생 입력 폼
     with st.form("student_form", clear_on_submit=False):
-        sid = st.text_input("학번(5자리, 예: 10130)", placeholder="10130")
-        answer = st.text_area("나의 답안", height=180, placeholder="예) 답안을 입력하세요")
+        sid = st.text_input("학번(5자리, 예: 10130)", placeholder="학번을 입력하세요.")
+        answer = st.text_area("나의 답안", height=180, placeholder="예) 답안을 입력하세요.")
         submitted = st.form_submit_button("채점 받기", type="primary")
 
     if submitted:
@@ -306,3 +306,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
